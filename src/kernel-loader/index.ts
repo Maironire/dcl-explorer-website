@@ -24,7 +24,7 @@ import { isElectron, launchDesktopApp } from '../integration/desktop'
 import { setAsRecentlyLoggedIn } from '../integration/browser'
 
 function getWantedChainId() {
-  let chainId = ChainId.ETHEREUM_MAINNET // mainnet
+  let chainId = ChainId.ETHEREUM_GOERLI // mainnet
 
   if (NETWORK === 'goerli') {
     chainId = ChainId.ETHEREUM_GOERLI
