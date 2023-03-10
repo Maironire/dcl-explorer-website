@@ -204,7 +204,10 @@ async function getVersions(flags: FeatureFlagsResult) {
 async function initKernel() {
   const container = document.getElementById('gameContainer') as HTMLDivElement
 
-  const flags = await fetchFlags({ applicationName: 'explorer' })
+  const flags = await fetchFlags({
+    applicationName: 'explorer',
+    featureFlagsUrl: 'https://play.crossverse.world'
+  })
 
   await getVersions(flags)
 
