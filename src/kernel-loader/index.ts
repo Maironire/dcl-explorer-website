@@ -1,33 +1,42 @@
 import { trackConnectWallet } from 'decentraland-dapps/dist/modules/analytics/utils'
 import { getProviderChainId } from 'decentraland-dapps/dist/modules/wallet/utils/getProviderChainId'
+import { connection } from 'decentraland-connect'
 import { disconnect, getEthereumProvider, restoreConnection } from '../eth/provider'
-import { internalTrackEvent, identifyUser, trackError, disableAnalytics } from '../integration/analytics'
+import { internalTrackEvent, identifyUser, disableAnalytics } from '../integration/analytics'
 import { injectKernel } from './injector'
 import {
   setKernelAccountState,
   setKernelError,
   setRendererLoading,
   setKernelLoaded,
-  setRendererReady
+  setRendererReady,
+  setDesktopDetected
 } from '../state/actions'
 import { ErrorType, store } from '../state/redux'
 import { ChainId } from '@dcl/schemas/dist/dapps/chain-id'
 import { ProviderType } from '@dcl/schemas/dist/dapps/provider-type'
 import { FeatureFlagsResult, fetchFlags } from '@dcl/feature-flags'
 import { resolveUrlFromUrn } from '@dcl/urn-resolver'
-import { defaultWebsiteErrorTracker, track } from '../utils/tracking'
+import { defaultWebsiteErrorTracker, defaultKernelErrorTracker, track } from '../utils/tracking'
 import { injectVersions } from '../utils/rolloutVersions'
-import { KernelResult } from '@dcl/kernel-interface'
-import { ENV, NETWORK, withOrigin, ensureOrigin, CATALYST, RENDERER_TYPE } from '../integration/url'
-import { errorToString } from '../utils/errorToString'
+import { KernelError, KernelResult } from '@dcl/kernel-interface'
+import { ENV, NETWORK, withOrigin, ensureOrigin, CATALYST, RENDERER_TYPE, SHOW_WALLET_SELECTOR } from '../integration/url'
 import { isElectron, launchDesktopApp } from '../integration/desktop'
-import { setAsRecentlyLoggedIn } from '../integration/browser'
+import { isMobile, setAsRecentlyLoggedIn } from '../integration/browser'
+import { FeatureFlags, isFeatureVariantEnabled } from '../state/selectors'
 
 function getWantedChainId() {
-  let chainId = ChainId.ETHEREUM_GOERLI // mainnet
+  let chainId: ChainId
 
-  if (NETWORK === 'goerli') {
-    chainId = ChainId.ETHEREUM_GOERLI
+  switch(NETWORK) {
+    case 'goerli':
+      chainId = ChainId.ETHEREUM_GOERLI
+      break
+    case 'sepolia':
+      chainId = ChainId.ETHEREUM_SEPOLIA
+      break
+    default:
+      chainId = ChainId.ETHEREUM_MAINNET
   }
 
   return chainId
@@ -47,8 +56,9 @@ export async function authenticate(providerType: ProviderType | null) {
           ),
           code: ErrorType.NET_MISMATCH,
           extra: {
+            providerType,
             providerChainId: providerChainId,
-            wantedChainId: wantedChainId
+            wantedChainId: wantedChainId,
           }
         })
       )
@@ -65,6 +75,7 @@ export async function authenticate(providerType: ProviderType | null) {
             ),
             code: ErrorType.NET_MISMATCH,
             extra: {
+              providerType,
               providerChainId: providerChainId,
               wantedChainId: wantedChainId
             }
@@ -85,7 +96,7 @@ export async function authenticate(providerType: ProviderType | null) {
     // Track that the users wallet has connected.
     // Only when the user has not connected as guest.
     if (providerType && account) {
-      trackConnectWallet({ providerType, address: account })
+      trackConnectWallet({ providerType, address: account, walletName: connection.getWalletName() })
     }
   } catch (err) {
     if (
@@ -238,7 +249,7 @@ async function initKernel() {
         track('invalid_external_url', { url })
       }
     } catch (err: any) {
-      trackError(err, { context: 'explorer-website' })
+      defaultWebsiteErrorTracker(err)
     }
   })
 
@@ -268,19 +279,10 @@ async function initKernel() {
   })
 
   // all errors are also sent as trackingEvent
-  kernel.on('error', (error) => {
+  kernel.on('error', (error: KernelError) => {
     store.dispatch(setKernelError(error))
 
-    // TODO: move this into a saga for setKernelError
-    trackError(error.error, { context: 'kernel', ...(error.extra || {}) })
-
-    // trackError only sends information to rollbar, we must get statistical information of errors in segment
-    // via this track() function
-    track('explorer_kernel_error', {
-      // this string concatenation exists on purpose, it is a safe way to do (error).toString in case (error) is nullish
-      error: errorToString(error)
-    })
-
+    defaultKernelErrorTracker(error.error, error.extra, error.level)
     // since setKernelError(error) produces an unrecoverable black screen of death, we disable analytics
     disableAnalytics()
   })
@@ -320,16 +322,26 @@ async function initLogin(kernel: KernelResult) {
       if (storedSession) {
         track('automatic_relogin', { provider_type: provider.providerType })
         authenticate(provider.providerType).catch(defaultWebsiteErrorTracker)
+        return
       }
+    }
+
+    if (
+      isFeatureVariantEnabled(store.getState(), FeatureFlags.SeamlessLogin) &&
+      !SHOW_WALLET_SELECTOR
+    ) {
+      track('seamless_login')
+      authenticate(null).catch(defaultWebsiteErrorTracker)
+      return
     }
   }
 }
 
 export function startKernel() {
-  if (NETWORK && NETWORK !== 'mainnet' && NETWORK !== 'goerli') {
+  if (NETWORK && NETWORK !== 'mainnet' && NETWORK !== 'goerli' && NETWORK !== 'sepolia') {
     store.dispatch(
       setKernelError({
-        error: new Error(`Invalid NETWORK url param, valid options are 'goerli' and 'mainnet'`),
+        error: new Error(`Invalid NETWORK url param, valid options are 'mainnet', 'goerli' and 'sepolia'`),
         code: ErrorType.FATAL
       })
     )
@@ -340,7 +352,7 @@ export function startKernel() {
     store.dispatch(
       setKernelError({
         error: new Error(
-          `The "ENV" URL parameter is no longer supported. Please use NETWORK=goerli in the cases where ENV=zone was used`
+          `The "ENV" URL parameter is no longer supported. Please use NETWORK=goerli or NETWORK=sepolia in the cases where ENV=zone was used`
         ),
         code: ErrorType.FATAL
       })
@@ -368,21 +380,24 @@ export function startKernel() {
 
   track('initialize_versions', injectVersions({}))
 
-  launchDesktopApp().then((launched) => {
-    if (launched) {
-      track('desktop_launched')
-    }
+  if (!isMobile()) {
+    launchDesktopApp().then((launched) => {
+      if (launched) {
+        store.dispatch(setDesktopDetected(launched))
+        track('desktop_launched')
+      }
 
-    return initKernel()
-      .then((kernel) => {
-        store.dispatch(setKernelLoaded(kernel))
-        if (!launched) {
-          return initLogin(kernel)
-        }
-      })
-      .catch((error) => {
-        store.dispatch(setKernelError({ error }))
-        defaultWebsiteErrorTracker(error)
-      })
-  })
+      return initKernel()
+        .then((kernel) => {
+          store.dispatch(setKernelLoaded(kernel))
+          if (!launched) {
+            return initLogin(kernel)
+          }
+        })
+        .catch((error) => {
+          store.dispatch(setKernelError({ error }))
+          defaultWebsiteErrorTracker(error)
+        })
+    })
+  }
 }

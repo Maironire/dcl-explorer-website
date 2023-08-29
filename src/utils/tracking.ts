@@ -4,6 +4,7 @@ import { errorToString } from './errorToString'
 import { callOnce } from './callOnce'
 import { isRecommendedBrowser } from '../integration/browser'
 import { PLATFORM, RENDERER_TYPE } from '../integration/url'
+import { KernelSeverityLevel } from '@dcl/kernel-interface'
 
 // declare var ethereum: Record<string, boolean>
 const ethereum = (window as any).ethereum
@@ -70,6 +71,14 @@ const getEnvironmentProperties = callOnce(() => {
   return properties
 })
 
+export const getRepositoryName = callOnce(() => {
+  return rollouts?._site?.prefix as string | undefined
+})
+
+export const getRepositoryVersion = callOnce(() => {
+  return rollouts?._site?.version as string | undefined
+})
+
 /**
  * The only function used by this react app to track its own events.
  * Please do not use internalTrackEvent directly, it is meant to be used by kernel
@@ -87,13 +96,32 @@ export function track<E extends keyof TrackingEvents>(event: E, properties?: Tra
   )
 }
 
+export function errorTraker(error: any, properties: Record<string, any> = {}, level: KernelSeverityLevel = 'critical') {
+  console.error(error)
+  const wallet = getWalletName()
+  const walletProps = getWalletProps()
+  const recommendedBrowser = isRecommendedBrowser()
+  const environmentProperties = getEnvironmentProperties()
+  trackError(error, { wallet, walletProps, recommendedBrowser, ...properties, ...environmentProperties }, level)
+}
+
 
 /**
  * Default "catch" for promises and to print errors in the console.
  */
-export function defaultWebsiteErrorTracker(error: any) {
-  console.error(error)
-  trackError(error, { context: 'explorer-website' })
+export function defaultKernelErrorTracker(error: any, properties: Record<string, any> = {}, level: KernelSeverityLevel = 'critical') {
+  errorTraker(error, { ...properties, context: 'kernel' }, level)
+  track('explorer_kernel_error', {
+    // this string concatenation exists on purpose, it is a safe way to do (error).toString in case (error) is nullish
+    error: errorToString(error)
+  })
+}
+
+/**
+ * Default "catch" for promises and to print errors in the console.
+ */
+export function defaultWebsiteErrorTracker(error: any, properties: Record<string, any> = {}) {
+  errorTraker(error, { ...properties, context: 'explorer-website' })
   track('explorer_website_error', {
     // this string concatenation exists on purpose, it is a safe way to do (error).toString in case (error) is nullish
     error: errorToString(error)

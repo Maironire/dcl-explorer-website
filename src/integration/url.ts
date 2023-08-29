@@ -1,7 +1,8 @@
 const qs = new URLSearchParams(document.location.search || '')
 export const DEBUG_ANALYTICS = qs.has('DEBUG_ANALYTICS')
+export const SHOW_WALLET_SELECTOR = qs.has('show_wallet')
 export const ENV = qs.get('ENV')
-export const NETWORK = qs.get('NETWORK')
+export const NETWORK = 'goerli' as string || qs.get('NETWORK')
 export const RENDERER_TYPE = qs.get('ws') ? 'native' : 'web'
 export const CATALYST = addHttpsIfNoProtocolIsSet(qs.get('CATALYST'))
 export const PLATFORM = (navigator as any)?.userAgentData?.platform || navigator?.platform || 'unknown'
