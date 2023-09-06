@@ -217,7 +217,7 @@ async function initKernel() {
 
   const flags = await fetchFlags({
     applicationName: 'explorer',
-    featureFlagsUrl: 'https://play.crossverse.world'
+    featureFlagsUrl: 'https://play.crossverse.world/config/'
   })
 
   await getVersions(flags)
